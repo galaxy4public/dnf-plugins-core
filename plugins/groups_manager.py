@@ -30,9 +30,9 @@ import dnf
 import dnf.cli
 
 
-RE_GROUP_ID_VALID = "-a-z0-9_.:"
-RE_GROUP_ID = re.compile(r"^[{}]+$".format(RE_GROUP_ID_VALID))
-RE_LANG = re.compile(r"^[-a-zA-Z0-9_.@]+$")
+RE_GROUP_ID_VALID = '-a-z0-9_.:'
+RE_GROUP_ID = re.compile(r'^[{}]+$'.format(RE_GROUP_ID_VALID))
+RE_LANG = re.compile(r'^[-a-zA-Z0-9_.@]+$')
 COMPS_XML_OPTIONS = {
     'default_explicit': True,
     'uservisible_explicit': True,
@@ -54,7 +54,7 @@ def translation_type(value):
             _("Invalid translated data, should be in form 'lang:text'"))
     lang, text = data
     if not RE_LANG.match(lang):
-        raise argparse.ArgumentTypeError(_("Invalid/empty language for translated data"))
+        raise argparse.ArgumentTypeError(_('Invalid/empty language for translated data'))
     return lang, text
 
 
@@ -82,14 +82,14 @@ class GroupsManagerCommand(dnf.cli.Command):
     def set_argparser(parser):
         # input / output options
         parser.add_argument('--load', action='append', default=[],
-                            metavar="<COMPS.XML>",
+                            metavar='COMPS.XML',
                             help=_('load groups metadata from file'))
         parser.add_argument('--save', action='append', default=[],
-                            metavar="<COMPS.XML>",
+                            metavar='COMPS.XML',
                             help=_('save groups metadata to file'))
-        parser.add_argument('--merge', metavar="<COMPS.XML>",
+        parser.add_argument('--merge', metavar='COMPS.XML',
                             help=_('load and save groups metadata to file'))
-        parser.add_argument('--print', action="store_true", default=False,
+        parser.add_argument('--print', action='store_true', default=False,
                             help=_('print the result metadata to stdout'))
         # group options
         parser.add_argument('--id', type=group_id_type,
@@ -100,29 +100,40 @@ class GroupsManagerCommand(dnf.cli.Command):
         parser.add_argument('--display-order', type=int,
                             help=_('sort order override'))
         parser.add_argument('--translated-name', action='append', default=[],
-                            metavar="LANG:TEXT", type=translation_type,
+                            metavar='LANG:TEXT', type=translation_type,
                             help=_('translated name for the group'))
         parser.add_argument('--translated-description', action='append', default=[],
-                            metavar="LANG:TEXT", type=translation_type,
+                            metavar='LANG:TEXT', type=translation_type,
                             help=_('translated description for the group'))
         visible = parser.add_mutually_exclusive_group()
-        visible.add_argument('--user-visible', dest="user_visible", action="store_true",
-                             help="make the group user visible (default)")
-        visible.add_argument('--not-user-visible', dest="user_visible", action="store_false",
-                             help="make the group user invisible")
+        visible.add_argument('--user-visible', dest='user_visible', action='store_true',
+                             default=None,
+                             help=_('make the group user visible (default)'))
+        visible.add_argument('--not-user-visible', dest='user_visible', action='store_false',
+                             default=None,
+                             help=_('make the group user invisible'))
 
         # package list options
-        # mandatory
-        # optional
-        # dependencies
-        parser.add_argument('--remove', action="store_true", default=False,
-                            help=_('remove packages from group instead of adding them'))
+        section = parser.add_mutually_exclusive_group()
+        section.add_argument('--mandatory', action='store_true',
+                             help=_('add packages to the mandatory section'))
+        section.add_argument('--optional', action='store_true',
+                             help=_('add packages to the optional section'))
+        section.add_argument('--remove', action='store_true', default=False,
+                             help=_('remove packages from group instead of adding them'))
+        parser.add_argument('--dependencies', action='store_true',
+                            help=_('include also direct dependencies for packages'))
+
+        parser.add_argument("packages", nargs='*', metavar='PACKAGE',
+                            help=_('package specification'))
 
     def configure(self):
-        # XXX require repos only when package list is present
         demands = self.cli.demands
-        demands.sack_activation = True
-        demands.available_repos = True
+
+        if self.opts.packages:
+            demands.sack_activation = True
+            demands.available_repos = True
+            demands.load_system_repo = False
 
         # handle --merge option (shortcut to --load and --save the same file)
         if self.opts.merge:
@@ -215,7 +226,35 @@ class GroupsManagerCommand(dnf.cli.Command):
         if self.opts.translated_description:
             group.desc_by_lang = langlist_to_strdict(self.opts.translated_description)
 
-        # XXX edit packages lists
+        # edit packages list
+        if self.opts.packages:
+            # find packages according to specifications from command line
+            packages = list(
+                self.base.sack.query().filterm(name__glob=self.opts.packages).latest())
+            if self.opts.dependencies:
+                # add packages that provide requirements
+                requirements = set()
+                for pkg in packages:
+                    requirements.update(pkg.requires)
+                packages.extend(self.base.sack.query().filterm(provides=requirements))
+
+            pkg_names = {pkg.name for pkg in packages}
+
+            if self.opts.remove:
+                for pkg_name in pkg_names:
+                    for pkg in group.packages_match(name=pkg_name,
+                                                    type=libcomps.PACKAGE_TYPE_UNKNOWN):
+                        group.packages.remove(pkg)
+            else:
+                if self.opts.mandatory:
+                    pkg_type = libcomps.PACKAGE_TYPE_MANDATORY
+                elif self.opts.optional:
+                    pkg_type = libcomps.PACKAGE_TYPE_OPTIONAL
+                else:
+                    pkg_type = libcomps.PACKAGE_TYPE_DEFAULT
+                for pkg_name in pkg_names:
+                    if not group.packages_match(name=pkg_name, type=pkg_type):
+                        group.packages.append(libcomps.Package(name=pkg_name, type=pkg_type))
 
     def run(self):
         self.load_input_files()
