@@ -22,8 +22,12 @@ from __future__ import absolute_import
 from __future__ import unicode_literals
 
 import argparse
+import gzip
 import libcomps
+import os
 import re
+import shutil
+import tempfile
 
 from dnfpluginscore import _, logger
 import dnf
@@ -159,8 +163,21 @@ class GroupsManagerCommand(dnf.cli.Command):
         for file_name in self.opts.load:
             file_comps = libcomps.Comps()
             try:
-                file_comps.fromxml_f(file_name)
-            except (IOError, libcomps.ParserError) as err:
+                if file_name.endswith('.gz'):
+                    # libcomps does not support gzipped files - decompress to temporary
+                    # location
+                    with gzip.open(file_name) as gz_file:
+                        with tempfile.NamedTemporaryFile() as temp_file:
+                            shutil.copyfileobj(gz_file, temp_file)
+                            # The xml written to temp_file  might remain in buffers.
+                            # Force writing it to disk.
+                            temp_file.file.flush()
+                            os.fsync(temp_file.file.fileno())
+                            file_comps.fromxml_f(temp_file.name)
+                else:
+                    file_comps.fromxml_f(file_name)
+            except (IOError, OSError, libcomps.ParserError) as err:
+                # gzip module raises OSError on reading from malformed gz file
                 logger.warning(_("Can't load file \"{}\": {}").format(file_name, err))
                 # get_last_errors() output often contains duplicit lines, remove them
                 seen = set()
