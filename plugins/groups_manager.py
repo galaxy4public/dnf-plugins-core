@@ -149,7 +149,8 @@ class GroupsManagerCommand(dnf.cli.Command):
                 or self.opts.display_order
                 or self.opts.translated_name
                 or self.opts.translated_description
-                or self.opts.user_visible is not None):
+                or self.opts.user_visible is not None
+                or self.opts.packages):
             if not self.opts.id and not self.opts.name:
                 raise dnf.cli.CliError(
                     _("Can't edit group without specifying it (use --id or --name)"))
@@ -246,14 +247,19 @@ class GroupsManagerCommand(dnf.cli.Command):
         # edit packages list
         if self.opts.packages:
             # find packages according to specifications from command line
-            packages = list(
-                self.base.sack.query().filterm(name__glob=self.opts.packages).latest())
+            packages = set()
+            for pkg_spec in self.opts.packages:
+                q = self.base.sack.query().filterm(name__glob=pkg_spec).latest()
+                if not q:
+                    logger.warning(_("No match for argument: {}").format(pkg_spec))
+                    continue
+                packages.update(q)
             if self.opts.dependencies:
                 # add packages that provide requirements
                 requirements = set()
                 for pkg in packages:
                     requirements.update(pkg.requires)
-                packages.extend(self.base.sack.query().filterm(provides=requirements))
+                packages.update(self.base.sack.query().filterm(provides=requirements))
 
             pkg_names = {pkg.name for pkg in packages}
 
@@ -269,7 +275,7 @@ class GroupsManagerCommand(dnf.cli.Command):
                     pkg_type = libcomps.PACKAGE_TYPE_OPTIONAL
                 else:
                     pkg_type = libcomps.PACKAGE_TYPE_DEFAULT
-                for pkg_name in pkg_names:
+                for pkg_name in sorted(pkg_names):
                     if not group.packages_match(name=pkg_name, type=pkg_type):
                         group.packages.append(libcomps.Package(name=pkg_name, type=pkg_type))
 
